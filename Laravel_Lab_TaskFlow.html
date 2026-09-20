@@ -479,6 +479,7 @@ personal_access_tokens (Sanctum)   jobs/failed_jobs (RabbitMQ: только fail
 </table>
 <div class="session-banner" id="session-1">Сессия <a href="#session-1" style="color:#fff;text-decoration:none">1</a> — Стенд, схема данных, миграции <span>~2 часа</span></div>
 <div class="step" id="step-1-1"><span class="step-head"><label class="done-label" title="Отметить шаг пройденным"><input type="checkbox" class="done" data-key="step-1-1"></label><span class="num">Шаг 1.1</span>Стенд: Docker, Laravel 13, Sanctum/Reverb/RabbitMQ-драйвер<a class="anchor" href="#step-1-1">#</a></span><div class="step-body">
+<div class="note-box"><span class="tag">УЖЕ В РЕПО</span> Этот репозиторий (<code>laravel-lab</code>) уже <code>git init</code> — отдельный не нужен, пропустите эту часть команды. Папки <code>api/</code>, <code>web/</code>, <code>rabbitmq/</code> и <code>docs/</code> уже созданы пустыми (заглушки <code>.gitkeep</code>) — <code>composer create-project</code> ниже можно выполнять прямо в <code>api/</code>, заглушку он сам уберёт.</div>
 <pre><code>mkdir taskflow-lab &amp;&amp; cd taskflow-lab &amp;&amp; git init
 mkdir -p rabbitmq docs</code></pre>
 <pre><code># docker-compose.yml
