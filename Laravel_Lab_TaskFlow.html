@@ -294,6 +294,7 @@ public function __construct(private TaskService $service) {}
 </table>
 <p><b>Фасад</b> — статический прокси: <code>Cache::get()</code> → <code>Facade::__callStatic</code> → <code>app('cache')-&gt;get()</code>. Ключ берётся из <code>getFacadeAccessor()</code>. Отсюда: (1) фасад тестируется через подмену биндинга (<code>Cache::fake()</code> = <code>instance('cache', new Fake)</code>); (2) фасад — не «глобальная функция», а сахар над DI, и в конструктор можно попросить тот же объект через контракт. <b>Real-time facades</b> (<code>use Facades\App\Services\Foo</code>) делают то же для любого класса.</p>
 <p><b>Провайдер</b> — единственное место, где приложение говорит контейнеру, что чем является. <code>register()</code> — биндинги, <code>boot()</code> — всё остальное. <code>DeferrableProvider</code> — регистрируется только при первом запросе своего сервиса (для тяжёлых пакетов).</p>
+<p><code>when(X)-&gt;needs(Y)-&gt;give(Z)</code> и <code>tag</code>/<code>tagged</code> — контейнер сам подставляет нужную реализацию по контексту, ровно тот же Strategy, что и в ООП-лабе, только выбор делает не ваш код, а DI. <code>extend</code> — тот же Decorator из ООП-лабы: оборачивает объект уже после того, как его собрал контейнер.</p>
 
 <h2 id="sec-4"><label class="done-label" title="Отметить раздел пройденным"><input type="checkbox" class="done" data-key="sec-4"></label>4. Eloquent под капотом: Model, Builder, связи, pivot <a class="anchor" href="#sec-4">#</a></h2>
 <pre>Task::where('status', 'open')-&gt;with('assignees')-&gt;get()
@@ -378,7 +379,7 @@ public function handle(Request $request, Closure $next, string $role = 'member')
 
 <table>
 <tr><th>Понятие</th><th>Что это</th><th>В TaskFlow</th></tr>
-<tr><td>Guard</td><td>«как узнать пользователя»: session (cookie) или token (заголовок)</td><td><code>auth:sanctum</code> — Bearer-токен для API и Vue</td></tr>
+<tr><td>Guard</td><td>«как узнать пользователя»: session (cookie) или token (заголовок)</td><td><code>auth:sanctum</code> — Bearer-токен для внешних API-клиентов (curl, сессии 1–5), cookie + CSRF (stateful) — для Vue-фронта (сессия 6)</td></tr>
 <tr><td>Provider</td><td>«откуда брать пользователей»: eloquent/database</td><td><code>users</code></td></tr>
 <tr><td>Sanctum tokens</td><td><code>$user-&gt;createToken('web', ['tasks:write'])</code> → строка; хранится хэш в <code>personal_access_tokens</code>; abilities — «что токену можно»</td><td>логин → токен → <code>Authorization: Bearer</code></td></tr>
 <tr><td>Gate</td><td>именованная проверка-замыкание: <code>Gate::define('manage-workspace', fn ($user, $ws) =&gt; …)</code></td><td>«админ воркспейса»</td></tr>
@@ -544,6 +545,7 @@ volumes:
 docker compose run --rm --no-deps app composer require laravel/sanctum laravel/reverb vladimir-yuldashev/laravel-queue-rabbitmq
 docker compose run --rm --no-deps app php artisan install:api
 docker compose run --rm --no-deps app php artisan reverb:install</code></pre>
+<div class="note-box"><span class="tag">ЕСЛИ COMPOSER РУГАЕТСЯ</span> Пакет <code>vladimir-yuldashev/laravel-queue-rabbitmq</code> поддержку новой мажорной версии Laravel добавляет не сразу — если <code>composer require</code> откажется резолвить зависимости под Laravel 13, не ждите релиза: поставьте вместо него голый <code>php-amqplib/php-amqplib</code> (тот же клиент, что и в RabbitMQ-лабе) и минимальный свой драйвер — класс <code>RabbitMQQueue extends Illuminate\Queue\Queue implements Illuminate\Contracts\Queue\Queue</code> с методами <code>push</code>/<code>pop</code>/<code>later</code> поверх <code>AMQPStreamConnection</code>, зарегистрированный через <code>Queue::extend('rabbitmq', fn () =&gt; new RabbitMQQueue(...))</code> в <code>boot()</code> провайдера. Остальные шаги сессии (<code>config/queue.php</code>, <code>.env</code>, воркер) не меняются.</div>
 <pre><code># api/.env — поверх сгенерированного
 DB_CONNECTION=pgsql
 DB_HOST=postgres
@@ -566,6 +568,8 @@ MAIL_MAILER=smtp
 MAIL_HOST=mailpit
 MAIL_PORT=1025
 MAIL_FROM_ADDRESS=taskflow@lab.test
+
+FRONTEND_URL=http://localhost:5173
 
 BROADCAST_CONNECTION=reverb
 REVERB_APP_ID=taskflow
@@ -728,8 +732,8 @@ Schema::create('invitations', function (Blueprint $t) {
 });</code></pre>
 <pre><code>docker compose exec app php artisan migrate
 docker compose exec app php artisan tinker --execute="dump(Schema::getTables() ? 'ok' : 'fail');"</code></pre>
-<div class="fix-box"><span class="tag">ОЖИДАЕМЫЙ РЕЗУЛЬТАТ</span><p>16 таблиц (считая <code>users</code>, <code>personal_access_tokens</code>, <code>jobs</code>/<code>failed_jobs</code>/<code>job_batches</code>, <code>notifications</code> — их создали <code>install:api</code> и стандартные миграции). Никаких ошибок внешних ключей — порядок миграций Laravel определяет по имени файла (дате создания), поэтому <code>workspaces</code> раньше <code>projects</code>.</p></div>
-<div class="why"><b>Зачем:</b> <code>morphs('attachable')</code> экономит две строки и сразу ставит составной индекс — то, что вручную часто забывают. Своя <code>id</code> у <code>workspace_user</code> (вместо композитного PK) — потому что в сессии 2 у неё появится собственный Eloquent-класс (<code>Membership</code>), которому проще жить с обычным автоинкрементным ключом. У <code>task_user</code> и <code>label_task</code>, наоборot, композитный PK — они остаются «немыми» pivot без своей модели.</div>
+<div class="fix-box"><span class="tag">ОЖИДАЕМЫЙ РЕЗУЛЬТАТ</span><p>20 таблиц (считая <code>users</code>, <code>personal_access_tokens</code>, <code>jobs</code>/<code>failed_jobs</code>/<code>job_batches</code>, <code>password_reset_tokens</code>, <code>sessions</code>, <code>cache</code>/<code>cache_locks</code> — их создали <code>install:api</code> и стандартные миграции; <code>notifications</code> здесь ещё нет — её создаст отдельная <code>php artisan notifications:table</code> в сессии 8). Никаких ошибок внешних ключей — порядок миграций Laravel определяет по имени файла (дате создания), поэтому <code>workspaces</code> раньше <code>projects</code>.</p></div>
+<div class="why"><b>Зачем:</b> <code>morphs('attachable')</code> экономит две строки и сразу ставит составной индекс — то, что вручную часто забывают. Своя <code>id</code> у <code>workspace_user</code> (вместо композитного PK) — потому что в сессии 2 у неё появится собственный Eloquent-класс (<code>Membership</code>), которому проще жить с обычным автоинкрементным ключом. У <code>task_user</code> и <code>label_task</code>, наоборот, композитный PK — они остаются «немыми» pivot без своей модели.</div>
 <div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Почему у <code>activities.user_id</code> — <code>nullable()</code>, а у <code>comments.user_id</code> — нет? Придумайте случай, когда автор действия неизвестен.</li><li>Что бы сломалось, если бы <code>workspace_user</code> не имела <code>unique(['workspace_id', 'user_id'])</code>? Где тогда пришлось бы проверять дубли — в БД или в коде?</li></ul></div>
 </div></div>
 <div class="next-box"><span class="tag">ИТОГ СЕССИИ 1 → ПЕРЕД СЕССИЕЙ 2</span><ul>
@@ -890,7 +894,7 @@ dump($w-&gt;members()-&gt;wherePivot('role', Role::Admin-&gt;value)-&gt;count())
 $w-&gt;members()-&gt;updateExistingPivot($member-&gt;id, ['role' =&gt; Role::Admin-&gt;value]);   // изменить роль
 $w-&gt;members()-&gt;detach($member-&gt;id);                                       // убрать из воркспейса</code></pre>
 <div class="fix-box"><span class="tag">ОЖИДАЕМЫЙ РЕЗУЛЬТАТ</span><p><code>getTable()</code> сначала покажет неверную <code>user_workspace</code> — это и есть демонстрация того, откуда берутся «пивот не работает» на практике: Eloquent сам придумывает имя, если не совпадает с реальным. После явного указания всё встаёт на место: роли читаются, <code>wherePivot</code> фильтрует, <code>updateExistingPivot</code> меняет роль без detach/attach.</p></div>
-<div class="why"><b>Зачем:</b> <b>Правило имени pivot-таблицы</b> по умолчанию: единственное число обеих моделей в алфавитном порядке через <code>_</code> — <code>role_user</code>, <code>project_task</code> и т. п. В вашей схеме имя <code>workspace_user</code> совпадает с конвенцией лишь случайно для этой пары (workspace < user по алфавиту — ok), но если бы вы её создали как <code>workspaces_users</code> (множественное число) или <code>membership</code> — угадывание сломалось бы. <b>Без <code>withPivot('role')</code></b> — <code>$user-&gt;pivot-&gt;role</code> тихо равен <code>null</code>, без единой ошибки: именно так выглядит «пивот не работает» — компилируется, отдаёт null. <b><code>wherePivot</code></b> vs обычный <code>where</code>: <code>where('role', ...)</code> искал бы колонку <code>role</code> в таблице <code>users</code>, которой там нет.</div>
+<div class="why"><b>Зачем:</b> <b>Правило имени pivot-таблицы</b> по умолчанию: единственное число обеих моделей в алфавитном порядке через <code>_</code> — <code>role_user</code>, <code>project_task</code> и т. п. В вашей схеме имя <code>workspace_user</code> конвенции НЕ соответствует: по алфавиту user < workspace, и угадывание дало бы <code>user_workspace</code> (это и показал код выше) — отсюда и нужен явный второй аргумент <code>belongsToMany</code>. А если бы вы назвали таблицу <code>workspaces_users</code> (множественное число) или <code>membership</code> — угадывание сломалось бы. <b>Без <code>withPivot('role')</code></b> — <code>$user-&gt;pivot-&gt;role</code> тихо равен <code>null</code>, без единой ошибки: именно так выглядит «пивот не работает» — компилируется, отдаёт null. <b><code>wherePivot</code></b> vs обычный <code>where</code>: <code>where('role', ...)</code> искал бы колонку <code>role</code> в таблице <code>users</code>, которой там нет.</div>
 <div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Вызовите <code>$w-&gt;members()-&gt;attach($owner-&gt;id)</code> ещё раз (тот же пользователь). Что произойдёт — исключение, дубль строки, или тихо ничего? Как защититься на уровне БД (вспомните миграцию 1.2)?</li><li>Почему обратная связь <code>User::workspaces()</code> тоже указывает <code>'workspace_user'</code> вторым аргументом, а не первым? Что было бы первым, если бы Eloquent предположил таблицу?</li></ul></div>
 </div></div>
 <div class="step" id="step-2-5"><span class="step-head"><label class="done-label" title="Отметить шаг пройденным"><input type="checkbox" class="done" data-key="step-2-5"></label><span class="num">Шаг 2.5</span>Свой Pivot-класс Membership: casts на pivot, ->using(), ->as(), бизнес-методы<a class="anchor" href="#step-2-5">#</a></span><div class="step-body">
@@ -957,7 +961,7 @@ dump($task-&gt;labels-&gt;pluck('name'));
 $task-&gt;assignees()-&gt;syncWithoutDetaching([$member-&gt;id]);     // добавить, не трогая остальных исполнителей
 $task-&gt;assignees()-&gt;detach();                                  // снять всех</code></pre>
 <div class="fix-box"><span class="tag">ОЖИДАЕМЫЙ РЕЗУЛЬТАТ</span><p><code>sync([$label1-&gt;id])</code> оставляет только <code>label1</code>, даже если раньше были обе метки — это его смысл: «пусть будет ровно так». <code>toggle</code> — переключатель для каждого ID независимо. <code>pluck('name')</code> в конце покажет актуальный набор после всех операций.</p></div>
-<div class="why"><b>Зачем:</b> Четыре метода pivot-манипуляций решают разные задачи, и путаница между ними — источник багов «пропали данные»: <b><code>attach</code></b> — добавить (может задвоить, если нет unique-констрейнта — у <code>label_task</code> композитный PK защищает). <b><code>sync</code></b> — заменить набор целиком (форма «выбрать метки чекбоксами» — típично для sync). <b><code>syncWithoutDetaching</code></b> — sync, который никого не убирает (только добавляет недостающих). <b><code>toggle</code></b> — переключить каждый элемент независимо от остальных.</div>
+<div class="why"><b>Зачем:</b> Четыре метода pivot-манипуляций решают разные задачи, и путаница между ними — источник багов «пропали данные»: <b><code>attach</code></b> — добавить (может задвоить, если нет unique-констрейнта — у <code>label_task</code> композитный PK защищает). <b><code>sync</code></b> — заменить набор целиком (форма «выбрать метки чекбоксами» — типично для sync). <b><code>syncWithoutDetaching</code></b> — sync, который никого не убирает (только добавляет недостающих). <b><code>toggle</code></b> — переключить каждый элемент независимо от остальных.</div>
 <div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Чем <code>$task-&gt;assignees()-&gt;attach($id)</code> отличается от <code>$task-&gt;assignees()-&gt;attach($id, ['assigned_at' =&gt; now()])</code>, если колонка не nullable и без <code>useCurrent()</code>? Что случится?</li><li>Спроектируйте (без кода) форму «назначить исполнителей» на Vue: какой из четырёх методов вызвать при сохранении формы с чекбоксами, если сервер получает полный список выбранных ID?</li></ul></div>
 </div></div>
 <div class="step" id="step-2-7"><span class="step-head"><label class="done-label" title="Отметить шаг пройденным"><input type="checkbox" class="done" data-key="step-2-7"></label><span class="num">Шаг 2.7</span>Полиморфные связи: MorphTo/MorphMany на attachments и activities, morphMap<a class="anchor" href="#step-2-7">#</a></span><div class="step-body">
@@ -1077,7 +1081,7 @@ class UserResource extends JsonResource
     {
         return [
             'id' =&gt; $this-&gt;id, 'name' =&gt; $this-&gt;name, 'email' =&gt; $this-&gt;email,
-            'role' =&gt; $this-&gt;whenPivotLoaded('workspace_user', fn () =&gt; $this-&gt;membership-&gt;role-&gt;value),   // только если это участник ИМЕННО с этим pivot
+            'role' =&gt; $this-&gt;whenPivotLoadedAs('membership', 'workspace_user', fn () =&gt; $this-&gt;membership-&gt;role-&gt;value),   // аксессор pivot переименован в membership (шаг 2.5) — whenPivotLoaded() по умолчанию проверяет именно $this-&gt;pivot и здесь бы не сработал
         ];
     }
 }
@@ -1125,7 +1129,7 @@ public function index(Project $project)
   "labels": [ { "id": 1, "name": "bug", "color": "#e53e3e" } ],
   "comments_count": 3,
   "is_overdue": true
-}</pre><p>Обратите внимание на <code>assignees[].role</code> — его нет, хотя вы могли ожидать. Это специально: <code>whenPivotLoaded('workspace_user', …)</code> проверяет конкретное имя pivot-связи, а у <code>assignees</code> она называется иначе (<code>task_user</code>, без роли вообще). <code>UserResource</code> переиспользуется в двух разных контекстах, и в этом — сила и ловушка ресурсов одновременно.</p></div>
+}</pre><p>Обратите внимание на <code>assignees[].role</code> — его нет, хотя вы могли ожидать. Это специально: <code>whenPivotLoadedAs('membership', 'workspace_user', …)</code> проверяет и конкретный аксессор pivot-связи, и её таблицу, а у <code>assignees</code> и то, и другое другое (аксессор остался <code>pivot</code>, таблица — <code>task_user</code>, без роли вообще). <code>UserResource</code> переиспользуется в двух разных контекстах, и в этом — сила и ловушка ресурсов одновременно.</p></div>
 <div class="why"><b>Зачем:</b> <b><code>whenLoaded</code></b> — ключевой приём: ресурс не грузит связь сам (это сделал бы N+1 на каждый вызов <code>toArray</code>!), а только <i>показывает</i> её, если контроллер её <code>with()</code>-нул. Уберите <code>with('assignees')</code> из контроллера — поле <code>assignees</code> исчезнет из ответа, а не станет пустым массивом (<code>MissingValue</code> просто не попадает в JSON). <b><code>whenCounted</code></b> — то же самое для <code>withCount</code>. <b>Вложенные ресурсы</b> (<code>UserResource::collection(...)</code>) переиспользуют форму представления пользователя везде, где он появляется — в задаче, в списке участников, в комментарии.</div>
 <details class="deep"><summary>🔬 Под капотом: UserResource и роль — почему это архитектурная проблема, а не баг</summary><div class="deep-body">
 
@@ -1187,7 +1191,7 @@ class StoreTaskRequest extends FormRequest
             'priority' =&gt; ['required', Rule::enum(TaskPriority::class)],       // enum прямо как правило валидации
             'due_at' =&gt; ['nullable', 'date', 'after:today'],
             'label_ids' =&gt; ['array'],
-            'label_ids.*' =&gt; ['integer', Rule::exists('labels', 'id')-&gt;where('workspace_id', fn () =&gt; $this-&gt;route('project')-&gt;workspace_id)],
+            'label_ids.*' =&gt; ['integer', Rule::exists('labels', 'id')-&gt;where(fn ($query) =&gt; $query-&gt;where('workspace_id', $this-&gt;route('project')-&gt;workspace_id))],
         ];
     }
 
@@ -1273,7 +1277,7 @@ curl -s localhost:8000/api/v1/tasks/999 -H "Authorization: Bearer $TOKEN"</code>
 {"message":"The priority field is invalid. (and 1 more error)","errors":{"title":["The title field is required."],"priority":["..."],"due_at":["Срок должен быть в будущем."]}}   ← 422
 {"message":"No query results for model [App\\Models\\Task] 999"}                                                                                                                ← 404, автоматически</pre></div>
 <div class="why"><b>Зачем:</b> <b><code>prepareForValidation</code></b> отрабатывает <i>до</i> правил — заголовок обрежется от пробелов прежде, чем <code>required</code> его проверит. <b><code>Rule::enum</code></b> — валидация прямо по enum-классу, без ручного списка строк (тот же принцип, что <code>Rule::exists</code> с замыканием для условия). <b><code>safe()-&gt;except(...)</code></b> vs <code>validated()</code>: оба возвращают только провалидированные поля, <code>safe()</code> даёт объект с доп. методами (<code>only</code>, <code>except</code>, <code>merge</code>). <b><code>-&gt;shallow()</code></b> у <code>apiResource</code> — вложенный маршрут только для <code>index/store</code> (нужен контекст проекта), а <code>show/update/destroy</code> — по одному <code>{task}</code>, потому что задача уже сама себя идентифицирует. <b>404 на несуществующую задачу</b> — не ваш код: <code>ModelNotFoundException</code> ловится глобальным рендерером Laravel для запросов, ожидающих JSON.</div>
-<div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Что произойдёt, если в <code>UpdateTaskRequest</code> использовать <code>required</code> вместо <code>sometimes</code> для <code>title</code>? Проверьте PATCH с одним полем <code>status</code>.</li><li>Почему <code>label_ids.*</code> использует <code>Rule::exists(...)-&gt;where(fn () =&gt; ...)</code>, а не просто <code>exists:labels,id</code>? Что могло бы пойти не так без ограничения по воркспейсу?</li></ul></div>
+<div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Что произойдёт, если в <code>UpdateTaskRequest</code> использовать <code>required</code> вместо <code>sometimes</code> для <code>title</code>? Проверьте PATCH с одним полем <code>status</code>.</li><li>Почему <code>label_ids.*</code> использует <code>Rule::exists(...)-&gt;where(fn () =&gt; ...)</code>, а не просто <code>exists:labels,id</code>? Что могло бы пойти не так без ограничения по воркспейсу?</li></ul></div>
 </div></div>
 <div class="step" id="step-4-2"><span class="step-head"><label class="done-label" title="Отметить шаг пройденным"><input type="checkbox" class="done" data-key="step-4-2"></label><span class="num">Шаг 4.2</span>Своё middleware EnsureWorkspaceRole: параметры, route(), attributes<a class="anchor" href="#step-4-2">#</a></span><div class="step-body">
 <p>Своё middleware — не «пример для учебника», а реальная проверка членства в воркспейсе с ролью, которая пригодится в каждом эндпоинте.</p><pre><code>docker compose exec app php artisan make:middleware EnsureWorkspaceRole</code></pre>
@@ -1518,6 +1522,10 @@ docker compose exec app php artisan tinker --execute="dump(App\Models\Activity::
 <div class="step" id="step-6-1"><span class="step-head"><label class="done-label" title="Отметить шаг пройденным"><input type="checkbox" class="done" data-key="step-6-1"></label><span class="num">Шаг 6.1</span>Sanctum SPA: login/logout через сессию и CSRF-cookie<a class="anchor" href="#step-6-1">#</a></span><div class="step-body">
 <p>Login/logout через Sanctum SPA-режим (cookie-based, а не «токен в localStorage») — стандарт для first-party фронта на том же домене.</p><pre><code>// config/sanctum.php — уже настроено install:api; проверить stateful домены
 'stateful' =&gt; explode(',', env('SANCTUM_STATEFUL_DOMAINS', 'localhost,localhost:5173')),</code></pre>
+<pre><code>// bootstrap/app.php — install:api регистрирует Sanctum, но stateful-мидлварь для группы api включить нужно явно
+-&gt;withMiddleware(function (Middleware $middleware) {
+    $middleware-&gt;statefulApi();    // добавляет EnsureFrontendRequestsAreStateful перед auth:sanctum — без этого cookie-сессия не распознаётся
+})</code></pre>
 <pre><code>docker compose exec app php artisan make:controller Api/AuthController</code></pre>
 <pre><code>// app/Http/Controllers/Api/AuthController.php
 class AuthController extends Controller
@@ -1550,7 +1558,7 @@ Route::middleware('auth:sanctum')-&gt;group(function () {
     // ... остальные v1-маршруты из прошлых сессий
 });</code></pre>
 <pre><code>curl -s -c cookies.txt localhost:8000/sanctum/csrf-cookie                                   # получить XSRF-TOKEN cookie
-CSRF=$(grep XSRF cookies.txt | awk '{print $NF}')
+CSRF=$(grep XSRF cookies.txt | awk '{print $NF}' | php -r 'echo urldecode(fgets(STDIN));')   # cookie отдаётся URL-encoded, axios декодирует сам — curl нужно вручную
 curl -s -b cookies.txt -c cookies.txt -X POST localhost:8000/api/login \
   -H "X-XSRF-TOKEN: $CSRF" -H 'Content-Type: application/json' -d '{"email":"owner@taskflow.test","password":"password"}' | jq
 curl -s -b cookies.txt localhost:8000/api/me | jq</code></pre>
@@ -1683,27 +1691,30 @@ async function submit() {
     &lt;button&gt;Войти&lt;/button&gt;&lt;p v-if="error"&gt;{{ error }}&lt;/p&gt;
   &lt;/form&gt;
 &lt;/template&gt;</code></pre>
-<pre><code>&lt;!-- web/src/views/WorkspacesView.vue --&gt;
+<pre><code>&lt;!-- web/src/views/WorkspacesView.vue — воркспейс раскрывается списком его проектов, доска открывается по конкретному проекту --&gt;
 &lt;script setup&gt;
 import { ref, onMounted } from 'vue'
 import { http } from '@/api/http'
 const workspaces = ref([])
-onMounted(async () =&gt; { workspaces.value = (await http.get('/api/v1/workspaces')).data.data })    // добавьте GET /v1/workspaces сами
+onMounted(async () =&gt; { workspaces.value = (await http.get('/api/v1/workspaces')).data.data })    // добавьте GET /v1/workspaces сами; включите projects в ответ (with('projects'))
 &lt;/script&gt;
 &lt;template&gt;
-  &lt;ul&gt;&lt;li v-for="w in workspaces" :key="w.id"&gt;&lt;RouterLink :to="`/workspaces/${w.id}/board`"&gt;{{ w.name }}&lt;/RouterLink&gt;&lt;/li&gt;&lt;/ul&gt;
+  &lt;ul v-for="w in workspaces" :key="w.id"&gt;
+    &lt;li&gt;{{ w.name }}
+      &lt;ul&gt;&lt;li v-for="p in w.projects" :key="p.id"&gt;&lt;RouterLink :to="`/workspaces/${w.id}/projects/${p.id}/board`"&gt;{{ p.name }}&lt;/RouterLink&gt;&lt;/li&gt;&lt;/ul&gt;
+    &lt;/li&gt;
+  &lt;/ul&gt;
 &lt;/template&gt;</code></pre>
 <pre><code>&lt;!-- web/src/views/BoardView.vue — упрощённая канбан-доска задач проекта --&gt;
 &lt;script setup&gt;
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
 import { http } from '@/api/http'
 
-const route = useRoute()
+const props = defineProps(['id', 'projectId'])            // оба приходят из route params (props: true в роутере); id — воркспейса, для канала в 6.4
 const tasks = ref([])
 const STATUSES = ['backlog', 'in_progress', 'review', 'done']
 
-async function load() { tasks.value = (await http.get(`/api/v1/projects/${route.params.projectId}/tasks`)).data.data }
+async function load() { tasks.value = (await http.get(`/api/v1/projects/${props.projectId}/tasks`)).data.data }
 onMounted(load)
 
 const byStatus = computed(() =&gt; Object.fromEntries(STATUSES.map(s =&gt; [s, tasks.value.filter(t =&gt; t.status === s)])))
@@ -1732,7 +1743,7 @@ const routes = [
   { path: '/', redirect: '/login' },
   { path: '/login', component: () =&gt; import('@/views/LoginView.vue') },
   { path: '/workspaces', component: () =&gt; import('@/views/WorkspacesView.vue') },
-  { path: '/workspaces/:id/board', component: () =&gt; import('@/views/BoardView.vue'), props: r =&gt; ({ projectId: r.query.project }) },
+  { path: '/workspaces/:id/projects/:projectId/board', component: () =&gt; import('@/views/BoardView.vue'), props: true },
 ]</code></pre>
 <pre><code>docker compose --profile web up -d
 # http://localhost:5173/login → войти → /workspaces → доска задач; сменить статус в select — задача переезжает в другую колонку</code></pre>
@@ -2004,6 +2015,8 @@ class WorkspaceInvitationMail extends Mailable implements ShouldQueue           
         ]);
     }
 }</code></pre>
+<pre><code>// config/app.php — добавить рядом с остальными ключами, иначе frontend_url всегда null
+'frontend_url' =&gt; env('FRONTEND_URL', 'http://localhost:5173'),</code></pre>
 <pre><code>{{-- resources/views/emails/workspace-invitation.blade.php --}}
 @component('mail::message')
 # Приглашение в {{ $workspaceName }}
@@ -2029,7 +2042,7 @@ public function invite(Workspace $workspace, string $email, Role $role, User $in
   -d '{"email":"friend@taskflow.test","role":"member"}'
 open http://localhost:8025           # Mailpit — письмо с кнопкой "Принять приглашение"</code></pre>
 <div class="fix-box"><span class="tag">ОЖИДАЕМЫЙ РЕЗУЛЬТАТ</span><p>В Mailpit — письмо с markdown-вёрсткой (готовая тема оформления <code>mail::message</code>), кнопкой и ссылкой на <code>acceptUrl</code>. Ответ API вернулся мгновенно — письмо ушло через очередь RabbitMQ, не блокируя запрос.</p></div>
-<div class="why"><b>Зачем:</b> <code>-&gt;queue()</code> вместо <code>-&gt;send()</code> — тот же принцип, что <code>ShouldQueue</code> у Job/Listener: SMTP может отвечать секундами, и заставлять пользователя ждать письмо ради ответа «приглашение создано» — плохой UX. <code>Mailable implements ShouldQueue</code> дублирует эту возможность на уровне класса (тогда даже вызов <code>-&gt;send()</code> становится асинхронным) — здесь оставлено явное <code>-&gt;queue()</code> для наглядности, в реальном проекте одного из двух достаточно. <code>markdown:</code> в <code>Content</code> даёt готовую тему письма (кнопки, разделители) без вёрстки HTML руками — этого не было в вашем опыте с фасадом Mail на голых <code>view()</code>.</div>
+<div class="why"><b>Зачем:</b> <code>-&gt;queue()</code> вместо <code>-&gt;send()</code> — тот же принцип, что <code>ShouldQueue</code> у Job/Listener: SMTP может отвечать секундами, и заставлять пользователя ждать письмо ради ответа «приглашение создано» — плохой UX. <code>Mailable implements ShouldQueue</code> дублирует эту возможность на уровне класса (тогда даже вызов <code>-&gt;send()</code> становится асинхронным) — здесь оставлено явное <code>-&gt;queue()</code> для наглядности, в реальном проекте одного из двух достаточно. <code>markdown:</code> в <code>Content</code> даёт готовую тему письма (кнопки, разделители) без вёрстки HTML руками — этого не было в вашем опыте с фасадом Mail на голых <code>view()</code>.</div>
 <div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Что произойдёт, если убрать <code>SerializesModels</code> у Mailable, у которого в конструкторе — Eloquent-модель <code>Invitation</code>? Job попадёт в очередь, но что будет при попытке его сериализовать?</li><li>Добавьте в <code>envelope()</code> <code>replyTo</code> на e-mail пригласившего. Где взять этот адрес — через <code>$this-&gt;invitation-&gt;invitedBy</code> (нужна связь) или хранить прямо в письме?</li></ul></div>
 </div></div>
 <div class="step" id="step-8-2"><span class="step-head"><label class="done-label" title="Отметить шаг пройденным"><input type="checkbox" class="done" data-key="step-8-2"></label><span class="num">Шаг 8.2</span>Notification: mail + database одним классом, вытесняет самодельный TaskNotifier<a class="anchor" href="#step-8-2">#</a></span><div class="step-body">
@@ -2069,7 +2082,7 @@ class SendAssignmentNotification implements ShouldQueue
         $event-&gt;assignee-&gt;notify(new TaskAssignedNotification($event-&gt;task));    // Notifiable-трейт уже есть у User по умолчанию
     }
 }
-// теперь MailTaskNotifier / LogTaskNotifier / интерфейс TaskNotifier из сессии 5 можно удалить — Notification их полностью заменяет</code></pre>
+// MailTaskNotifier / LogTaskNotifier / интерфейс TaskNotifier из сессии 5 уже убраны в 7.2 (их роль взяли на себя listeners) — здесь заменять больше нечего</code></pre>
 <pre><code>// app/Http/Controllers/Api/V1/NotificationController.php
 class NotificationController extends Controller
 {
@@ -2083,6 +2096,9 @@ class NotificationController extends Controller
         return response()-&gt;noContent();
     }
 }</code></pre>
+<pre><code>// routes/api.php — внутри группы v1/auth:sanctum
+Route::get('/notifications', [NotificationController::class, 'index']);
+Route::patch('/notifications/{id}/read', [NotificationController::class, 'markRead']);</code></pre>
 <pre><code>curl -s -X POST localhost:8000/api/v1/tasks/1/assignees -b cookies.txt -H "X-XSRF-TOKEN: $CSRF" -H 'Content-Type: application/json' -d '{"user_id":2}'
 sleep 1
 curl -s localhost:8000/api/v1/notifications -b user2_cookies.txt | jq '.data[0]'
@@ -2095,7 +2111,7 @@ open http://localhost:8025</code></pre>
   "created_at": "..."
 }</pre><p>И то же уведомление письмом в Mailpit — один класс, оба канала, без дублирования логики формирования сообщения.</p></div>
 <div class="why"><b>Зачем:</b> <b><code>via()</code></b> — единственное место, решающее, куда пойдёт уведомление; можно сделать зависимым от настроек пользователя (<code>$notifiable-&gt;wantsEmail() ? ['mail'] : []</code>). <b><code>toDatabase</code></b> хранит структурированный JSON в общей таблице <code>notifications</code> (полиморфная — <code>notifiable_type/notifiable_id</code>, тот же паттерн, что <code>attachments</code> и <code>activities</code> из сессии 2, только для этого готова стандартная миграция и трейт). <b>Notification vs ваш <code>TaskNotifier</code>-интерфейс из сессии 5</b> — это не конкурирующие, а взаимозаменяемые решения одной задачи; здесь фреймворковый инструмент оказался богаче (сразу два канала, готовая read/unread-модель) — типичная ситуация, когда самодельная абстракция уступает встроенной, и её стоит убрать, а не держать «для красоты».</div>
-<div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Добавьte канал <code>broadcast</code> в <code>via()</code> уже сейчас (реализация <code>toBroadcast</code> — тривиальна, тот же массив, что <code>toDatabase</code>). Что нужно, чтобы это заработало прямо сейчас, а что подождёт сессии 9?</li><li>Почему <code>markAsRead()</code> вызывается через <code>$request-&gt;user()-&gt;notifications()-&gt;findOrFail($id)</code>, а не просто <code>DatabaseNotification::find($id)-&gt;markAsRead()</code>? Что за уязвимость закрывает первый вариант?</li></ul></div>
+<div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Добавьте канал <code>broadcast</code> в <code>via()</code> уже сейчас (реализация <code>toBroadcast</code> — тривиальна, тот же массив, что <code>toDatabase</code>). Что нужно, чтобы это заработало прямо сейчас, а что подождёт сессии 9?</li><li>Почему <code>markAsRead()</code> вызывается через <code>$request-&gt;user()-&gt;notifications()-&gt;findOrFail($id)</code>, а не просто <code>DatabaseNotification::find($id)-&gt;markAsRead()</code>? Что за уязвимость закрывает первый вариант?</li></ul></div>
 </div></div>
 <div class="step" id="step-8-3"><span class="step-head"><label class="done-label" title="Отметить шаг пройденным"><input type="checkbox" class="done" data-key="step-8-3"></label><span class="num">Шаг 8.3</span>Artisan-команда + Schedule: дайджест с withoutOverlapping и onOneServer<a class="anchor" href="#step-8-3">#</a></span><div class="step-body">
 <p>Ежедневный дайджест: собственная Artisan-команда + планировщик. Ровно то, что реально пригождается на работе.</p><pre><code>docker compose exec app php artisan make:command SendDailyDigest</code></pre>
@@ -2174,18 +2190,23 @@ class ProjectStatsController extends Controller
     }
 }
 // routes/api.php: Route::get('/projects/{project}/stats', [ProjectStatsController::class, 'show']);</code></pre>
-<pre><code>// app/Observers/TaskObserver.php — инвалидация при любом изменении, влияющем на статистику
-public function saved(Task $task): void   { Cache::forget("project:{$task-&gt;project_id}:stats"); }
-public function deleted(Task $task): void { Cache::forget("project:{$task-&gt;project_id}:stats"); }</code></pre>
+<pre><code>// app/Observers/TaskObserver.php — добавьте в СУЩЕСТВУЮЩИЙ класс (метод deleted() там уже есть с 7.1 — не создавайте второй, PHP не даст объявить метод дважды)
+public function saved(Task $task): void { Cache::forget("project:{$task-&gt;project_id}:stats"); }   // новый метод
+
+public function deleted(Task $task): void
+{
+    $this-&gt;activity-&gt;log($task, 'deleted');                       // было здесь с 7.1
+    Cache::forget("project:{$task-&gt;project_id}:stats");           // добавляете сейчас
+}</code></pre>
 <pre><code>curl -s localhost:8000/api/v1/projects/1/stats -b cookies.txt | jq
-docker compose exec redis redis-cli GET "laravel_database_project:1:stats" | head -c 200; echo
+docker compose exec redis redis-cli --scan --pattern "*project:1:stats"   # полное имя = REDIS_PREFIX (laravel_database_) + CACHE_PREFIX (laravel_cache_) + ключ
 curl -s -X PATCH localhost:8000/api/v1/tasks/1 -b cookies.txt -H "X-XSRF-TOKEN: $CSRF" -H 'Content-Type: application/json' -d '{"status":"done"}'
-docker compose exec redis redis-cli EXISTS "laravel_database_project:1:stats"
+docker compose exec redis redis-cli --scan --pattern "*project:1:stats"   # пусто — observer удалил ключ
 curl -s localhost:8000/api/v1/projects/1/stats -b cookies.txt | jq       # пересчитано и закэшировано заново</code></pre>
 <div class="fix-box"><span class="tag">ОЖИДАЕМЫЙ РЕЗУЛЬТАТ</span><pre>{"backlog": 40, "in_progress": 10, "done": 5}
-"...serialized php array..."
+"laravel_database_laravel_cache_project:1:stats"
 (204 No Content)
-(integer) 0                                    ← ключ удалён после изменения задачи
+(пусто)                                        ← ключ удалён после изменения задачи
 {"backlog": 40, "in_progress": 9, "done": 6}   ← пересчитано и закэшировано заново
 </pre></div>
 <div class="why"><b>Зачем:</b> <code>Cache::remember</code> — «получить, а если нет — посчитать и запомнить» одной строкой; повторный вызов внутри TTL не трогает БД вообще. Ключ содержит <code>project.id</code>, чтобы кэш был раздельным по каждому проекту — общая ошибка «один ключ на все данные» здесь исключена самой структурой имени. Инвалидация в <code>Observer::saved/deleted</code> — та же ловушка массовых операций из сессии 7: <code>Task::where(...)-&gt;update()</code> не вызовет <code>saved</code>, и кэш «протухнет» только по TTL, а не сразу — держите это в уме при массовых импортax.</div>
@@ -2227,15 +2248,20 @@ RateLimiter::for('task-creation', function (Request $request) {
         ? Limit::perMinute(10)-&gt;by($request-&gt;user()-&gt;id)-&gt;response(fn () =&gt; response()-&gt;json(['message' =&gt; 'Слишком много задач подряд, подождите минуту.'], 429))
         : Limit::none();
 });</code></pre>
-<pre><code>// routes/api.php
-Route::post('/projects/{project}/tasks', [TaskController::class, 'store'])-&gt;middleware(['auth:sanctum', 'throttle:task-creation']);</code></pre>
+<pre><code>// routes/api.php — заменить объявление ресурса внутри группы v1 (шаг 4.2): store выносим из apiResource,
+// чтобы навесить throttle только на него, не потеряв ни /api/v1-префикс, ни workspace.role:member
+Route::apiResource('projects.tasks', TaskController::class)-&gt;shallow()
+    -&gt;except('store')
+    -&gt;middleware('workspace.role:member');
+Route::post('/projects/{project}/tasks', [TaskController::class, 'store'])
+    -&gt;middleware(['workspace.role:member', 'throttle:task-creation']);</code></pre>
 <pre><code>for i in $(seq 1 12); do
   curl -s -o /dev/null -w "%{http_code} " -X POST localhost:8000/api/v1/projects/1/tasks -b cookies.txt -H "X-XSRF-TOKEN: $CSRF" \
     -H 'Content-Type: application/json' -d "{\"title\":\"Задача $i\",\"priority\":\"low\"}"
 done; echo
-docker compose exec redis redis-cli KEYS "laravel_cache*task-creation*"</code></pre>
+docker compose exec redis redis-cli --scan --pattern "*task-creation*"</code></pre>
 <div class="fix-box"><span class="tag">ОЖИДАЕМЫЙ РЕЗУЛЬТАТ</span><pre>201 201 201 201 201 201 201 201 201 201 429 429
-1) "laravel_cache:...task-creation..."</pre></div>
+"laravel_database_laravel_cache_...task-creation..."</pre></div>
 <div class="why"><b>Зачем:</b> <code>RateLimiter::for</code> регистрирует именованный лимит, <code>-&gt;by()</code> определяет ключ группировки (на пользователя, а не глобально — иначе один активный пользователь исчерпал бы лимит для всех), <code>throttle:task-creation</code> подключает его к маршруту. Внутри — тот же Redis, что и кэш: счётчик с TTL в минуту, атомарно инкрементируемый на каждый запрос. Кастомный <code>-&gt;response()</code> — свой формат 429 вместо дефолтного «Too Many Attempts.».</div>
 <div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Почему у анонима (<code>$request-&gt;user()</code> — <code>null</code>) стоит <code>Limit::none()</code>, а не, скажем, лимит по IP? Подумайте, где в приложении анонимный доступ к созданию задач вообще возможен — и если невозможен, зачем условие?</li><li>Добавьте общий лимит <code>api</code> в middleware группы <code>api</code> в <code>bootstrap/app.php</code>. Как теперь взаимодействуют два лимита (<code>api</code> и <code>task-creation</code>) на одном маршруте — оба проверяются?</li></ul></div>
 </div></div>
@@ -2289,10 +2315,10 @@ import { echo } from '@/echo'
 let channel
 onMounted(() =&gt; {
   load()
-  channel = echo.private(`workspace.${route.params.id}`)
+  channel = echo.private(`workspace.${props.id}`)
     .listen('.task.assigned', (e) =&gt; { tasks.value.push({ id: e.task_id, title: e.title, status: 'backlog' }); load() })
 })
-onUnmounted(() =&gt; echo.leave(`workspace.${route.params.id}`))
+onUnmounted(() =&gt; echo.leave(`workspace.${props.id}`))
 &lt;/script&gt;</code></pre>
 <pre><code># в одной вкладке браузера — доска проекта; во второй — назначить задачу через curl или другую вкладку
 curl -s -X POST localhost:8000/api/v1/tasks/2/assignees -b cookies.txt -H "X-XSRF-TOKEN: $CSRF" -H 'Content-Type: application/json' -d '{"user_id":3}'</code></pre>
@@ -2493,15 +2519,15 @@ class TaskAssignmentTest extends TestCase
         Mail::assertQueued(WorkspaceInvitationMail::class, fn ($mail) =&gt; $mail-&gt;invitation-&gt;email === 'x@test.com');
     }
 }</code></pre>
-<pre><code>// tests/Unit/TaskAssignerTest.php — unit-тест сервиса с моком интерфейса (из сессии 5, если TaskNotifier ещё жив; иначе адаптируйте под текущее)
+<pre><code>// tests/Unit/TaskAssignerTest.php — unit-тест сервиса: после 7.2 assign() больше не зовёт ActivityLogger напрямую,
+// он только диспетчерит TaskAssigned — вот это и проверяем, а не внутренности listeners
 class TaskAssignerTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_assign_attaches_user_and_records_activity(): void
+    public function test_assign_attaches_user_and_dispatches_event(): void
     {
-        $activity = $this-&gt;mock(ActivityLogger::class);
-        $activity-&gt;shouldReceive('log')-&gt;once()-&gt;withArgs(fn ($subject, $action) =&gt; $action === 'assigned');
+        Event::fake([TaskAssigned::class]);
 
         $task = Task::factory()-&gt;create();
         $user = User::factory()-&gt;create();
@@ -2509,6 +2535,7 @@ class TaskAssignerTest extends TestCase
         app(TaskAssigner::class)-&gt;assign($task, $user, $task-&gt;creator);
 
         $this-&gt;assertTrue($task-&gt;fresh()-&gt;assignees-&gt;contains($user));
+        Event::assertDispatched(TaskAssigned::class, fn ($event) =&gt; $event-&gt;task-&gt;is($task) &amp;&amp; $event-&gt;assignee-&gt;is($user));
     }
 }</code></pre>
 <pre><code>docker compose exec app php artisan test --filter=TaskAssignmentTest
@@ -2517,8 +2544,8 @@ docker compose exec app php artisan test --filter=TaskAssignerTest</code></pre>
    PASS  Tests\Unit\TaskAssignerTest (1)
 
   Tests:    3 passed</pre></div>
-<div class="why"><b>Зачем:</b> <b><code>Event::fake()</code></b> перехватывает <code>dispatch()</code> до того, как сработает хоть один listener — письма не уйдут, job не встанут в очередь, но вы проверите сам факт и параметры события. <b><code>Notification::fake()</code>/<code>Mail::fake()</code></b> — тот же принцип для своих слоёв: тест быстрый (никакого реального SMTP или RabbitMQ) и детерминированный. <b><code>$this-&gt;mock(ActivityLogger::class)</code></b> — контейнер подменяет биндинг интерфейса на Mockery-объект; когда <code>TaskAssigner</code> резолвится из контейнера внутри теста, он получает не <code>DatabaseActivityLogger</code>, а мок — это прямое следствие того, что в сессии 5 вы связали сервис с интерфейсом, а не с конкретным классом.</div>
-<div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Почему <code>Event::fake()</code> без аргумента (<code>Event::fake()</code> вместо <code>Event::fake([TaskAssigned::class])</code>) — более грубый инструмент? Что бы он подделал заодно, чего вы не хотели?</li><li>Уберите mock ActivityLogger и запустите тест с реальным <code>DatabaseActivityLogger</code>. Что нужно изменить в проверке, чтобы тест остался осмысленным (Assert через БД, а не через <code>shouldReceive</code>)?</li></ul></div>
+<div class="why"><b>Зачем:</b> <b><code>Event::fake([TaskAssigned::class])</code></b> перехватывает <code>dispatch()</code> до того, как сработает хоть один listener — письма не уйдут, job не встанут в очередь, но вы проверите сам факт и параметры события. Именно поэтому тест проверяет диспетч события, а не вызов <code>ActivityLogger</code> напрямую: с 7.2 <code>TaskAssigner::assign()</code> сам ничего не логирует и не уведомляет — этим занимаются listeners <code>TaskAssigned</code>, а мокать пришлось бы каждый из них по отдельности. <b><code>Notification::fake()</code>/<code>Mail::fake()</code></b> — тот же принцип для своих слоёв: тест быстрый (никакого реального SMTP или RabbitMQ) и детерминированный.</div>
+<div class="note-box"><span class="tag">ПРОВЕРЬ СЕБЯ</span><ul><li>Почему <code>Event::fake()</code> без аргумента (<code>Event::fake()</code> вместо <code>Event::fake([TaskAssigned::class])</code>) — более грубый инструмент? Что бы он подделал заодно, чего вы не хотели?</li><li>Напишите отдельный тест на сам listener <code>SendAssignmentNotification</code> — без <code>Event::fake()</code>, с <code>Notification::fake()</code>, вызывая <code>handle()</code> напрямую. Чем такой тест отличается от теста <code>TaskAssigner</code> по уровню (unit vs integration)?</li></ul></div>
 </div></div>
 <div class="step" id="step-10-4"><span class="step-head"><label class="done-label" title="Отметить шаг пройденным"><input type="checkbox" class="done" data-key="step-10-4"></label><span class="num">Шаг 10.4</span>Полный прогон тестов, карта проекта, «было / стало»<a class="anchor" href="#step-10-4">#</a></span><div class="step-body">
 <pre><code>docker compose exec app php artisan test</code></pre>
@@ -2527,7 +2554,7 @@ docker compose exec app php artisan test --filter=TaskAssignerTest</code></pre>
 ├── Models/           Workspace · Project · Task · Comment · Label · Attachment · Activity · Invitation · User
 │                     Pivots/Membership (custom Pivot, casts, -&gt;using()/-&gt;as())
 ├── Http/
-│   ├── Controllers/Api/{V1/{Task,Project,Workspace,Invitation,ProjectStats}Controller, AuthController, NotificationController}
+│   ├── Controllers/Api/{V1/{Task,Invitation,ProjectStats}Controller, AuthController, NotificationController}   (Project/WorkspaceController — не создавались, см. упражнение 6.3)
 │   ├── Requests/     Store/UpdateTaskRequest · StoreInvitationRequest
 │   ├── Resources/V1/ TaskResource · UserResource · LabelResource
 │   └── Middleware/   EnsureWorkspaceRole
@@ -2578,7 +2605,7 @@ web/     Vue: login · workspaces · доска задач с realtime (Echo/Rev
 <tr><td>hasManyThrough</td><td>2.8: Workspace::tasks()</td><td>сквозная связь без промежуточной загрузки</td></tr>
 <tr><td>N+1: with/whereHas/withCount</td><td>2.3, 2.8</td><td>три разных вопроса к данным</td></tr>
 <tr><td>preventLazyLoading</td><td>2.1, весь проект</td><td>N+1 — исключение в деве, а не тормоза в проде</td></tr>
-<tr><td>Коллекции</td><td>3.1</td><td>logика над уже загруженными данными</td></tr>
+<tr><td>Коллекции</td><td>3.1</td><td>логика над уже загруженными данными</td></tr>
 <tr><td>API Resources: whenLoaded/whenCounted</td><td>3.2: TaskResource</td><td>форма представления, а не N+1-ловушка</td></tr>
 <tr><td>paginate/simplePaginate/cursorPaginate</td><td>3.3</td><td>три разных SQL, три разных случая</td></tr>
 <tr><td>Form Request: rules/prepareForValidation/authorize</td><td>4.1, 6.4</td><td>валидация и права — до контроллера</td></tr>
