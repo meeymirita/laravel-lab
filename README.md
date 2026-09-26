@@ -2,7 +2,7 @@
 
 ![Laravel](laravel.png)
 
-> **24.09.2026 — методичка вычитана и исправлена.** Что найдено и что поправлено — в [fixes/laravel.md](https://github.com/meeymirita/submodule-group-lab/blob/main/fixes/laravel.md) сборного репозитория.
+> **24.09.2026 — методичка вычитана и исправлена.** Что найдено и что поправлено — в [fixes/laravel.md](https://github.com/meeymirita/lab-fixes/blob/main/laravel.md) репозитория `lab-fixes`.
 
 **Статус: ⚪ методичка готова, прохождение впереди.**
 **Сложность: высокая.** Нужен базовый Laravel (роутинг, контроллеры, миграции, Blade — даются ссылками на документацию, без разбора), ООП на PHP (см. [oop-lab](https://github.com/meeymirita/oop-lab)) и общее представление про очереди (см. [rabbitmq-lab](https://github.com/meeymirita/rabbitmq-lab)) — лаба на них ссылается, а не объясняет заново.
