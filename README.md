@@ -13,7 +13,7 @@ Laravel 13 "изнутри" — не "как вызвать", а что прои
 
 ## Стек
 
-Laravel 13 (PHP 8.4) + PostgreSQL 17 + Redis 7 + RabbitMQ 4 + Mailpit + Laravel Reverb; фронт — Vue 3 + Vite (JavaScript, только API-клиент). Всё в Docker.
+Laravel 13 (PHP 8.4) + PostgreSQL 18 + Redis 8 + RabbitMQ 4 + Mailpit + Laravel Reverb; фронт — Vue 3 + Vite (JavaScript, только API-клиент). Всё в Docker.
 
 ## Формат
 
