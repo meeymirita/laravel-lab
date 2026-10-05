@@ -17,7 +17,7 @@ Laravel 13 (PHP 8.4) + PostgreSQL 18 + Redis 8 + RabbitMQ 4 + Mailpit + Laravel 
 
 ## Формат
 
-Методичка [`laravel.html`](laravel.html) — открывается в браузере.
+Методичка [`laravel.html`](laravel.html) ([открыть на сайте](https://anitech.meeymirita.ru/works/laravel.html)) — открывается в браузере.
 
 ## Что внутри (10 сессий)
 
@@ -33,6 +33,10 @@ Laravel 13 (PHP 8.4) + PostgreSQL 18 + Redis 8 + RabbitMQ 4 + Mailpit + Laravel 
 - **Сессия 10** — фабрики для всех моделей, feature-тесты (`RefreshDatabase`), fakes/моки (Event/Notification/Mail), финальный прогон
 
 Лаба построена вокруг карты Laravel (`Kernel → Middleware → Router → Controller`, плюс сквозные Container/Events/Auth и менеджеры Database/Cache/Queue/Mail/Broadcasting) и проходит по каждому слою последовательно — от жизненного цикла запроса до тестов.
+
+## Лицензия и авторство
+
+Код — MIT, тексты — CC BY 4.0, обложки и иллюстрации не покрыты (см. [LICENSE](LICENSE)). Кто что сделал: [NOTICE](NOTICE).
 
 ---
 
