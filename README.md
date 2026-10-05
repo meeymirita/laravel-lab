@@ -17,7 +17,7 @@ Laravel 13 (PHP 8.4) + PostgreSQL 18 + Redis 8 + RabbitMQ 4 + Mailpit + Laravel 
 
 ## Формат
 
-Методичка [`Laravel_Lab_TaskFlow.html`](Laravel_Lab_TaskFlow.html) — открывается в браузере.
+Методичка [`laravel.html`](laravel.html) — открывается в браузере.
 
 ## Что внутри (10 сессий)
 
