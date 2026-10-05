@@ -1,6 +1,6 @@
 # Laravel Lab — TaskFlow
 
-![Laravel](laravel.png)
+![Laravel](https://meeymirita-files.storage.yandexcloud.net/laravel/laravel.png)
 
 > **24.09.2026 — методичка вычитана и исправлена.** Что найдено и что поправлено — в [fixes/backend/laravel.md](https://github.com/meeymirita/lab-fixes/blob/main/backend/laravel.md) репозитория `lab-fixes`.
 
